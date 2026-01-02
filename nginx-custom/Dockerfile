@@ -1,0 +1,18 @@
+ARG URL_DOCKER_INDEX=docker.io
+FROM ${URL_DOCKER_INDEX}/nginx:1.27
+
+# Copy the Nginx configuration file
+COPY ./nginx.conf /etc/nginx/nginx.conf
+
+# Copy the Nginx template files
+COPY ./templates /etc/nginx/templates
+
+# Copy the custom-error html files
+COPY ./custom-errors /usr/share/nginx/html/
+
+
+# Add startup scripts
+COPY ./35-create-log-dirs.sh /docker-entrypoint.d/35-create-log-dirs.sh
+RUN chmod +x /docker-entrypoint.d/35-create-log-dirs.sh
+COPY ./36-create-datashare-static-media.sh /docker-entrypoint.d/36-create-datashare-static-media.sh
+RUN chmod +x /docker-entrypoint.d/36-create-datashare-static-media.sh

@@ -1,0 +1,172 @@
+# Caching
+
+# Server block for HTTP traffic
+server {
+    listen ${NGINX_PORT_HTTP};
+    server_name _;
+
+    # Resolver is required to point to Docker internal DNS
+    resolver 127.0.0.11 valid=30s;
+
+    # GitBucket image can only be served over HTTP
+    # location /gitbucket/assets/ {
+    #     proxy_pass http://gitbucket_servers/gitbucket/assets/;
+    #     proxy_cache cache;
+    #     proxy_cache_key $host$uri$is_args$args;
+    #     proxy_cache_valid 200 301 302 1d;
+    #     expires 1d;
+    # }
+
+    # location /gitbucket {
+    #     proxy_pass http://gitbucket_servers/gitbucket;
+    #     proxy_set_header Host $host;
+    #     proxy_set_header X-Real-IP $remote_addr;
+    #     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    #     proxy_connect_timeout 600;
+    #     proxy_send_timeout 450;
+    #     proxy_read_timeout 450;
+    #     proxy_buffers 4 32k;
+    #     client_max_body_size 500m; # Big number is we can post big commits.
+    #     client_body_buffer_size 128k;
+    # }
+
+    error_page 500 502 503 504 /50x.html;
+    location = /50x.html {
+        root /usr/share/nginx/html;
+    }
+}
+
+# Server block for HTTPS traffic
+server {
+    listen ${NGINX_PORT_HTTPS} ssl;
+    http2 on;
+    server_name _;
+
+    # SSL certificate configuration
+    ssl_certificate /etc/nginx/certs/nginx.crt;
+    ssl_certificate_key /etc/nginx/certs/nginx.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305';
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    # 2. Add HSTS (Strict Transport Security)
+    # Tells browsers to ONLY use HTTPS for the next year.
+    # Don't implement this until you have working HTTPS and want to force only HTTPS.
+    # add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # Resolver is required to point to Docker internal DNS
+    resolver 127.0.0.11 valid=30s;
+
+    # Error pages
+    error_page 404 /404.html;
+    error_page 500 /500.html;
+    error_page 502 /502.html;
+    error_page 503 /503.html;
+    error_page 504 /504.html;
+
+    location ~ ^/(404|500|502|503|504)\.html$ {
+        root /usr/share/nginx/html;
+        internal; # Prevent direct access to error pages
+    }
+
+    location /static/ {
+        alias ${NGINX_STATIC_FOLDER};
+        # Cache Control Header:
+        # - public: allows caching by browsers and CDNs
+        # - no-transform: prevents intermediaries from altering the content
+        add_header Cache-Control "public, no-transform";
+        # Performance optimization:
+        # - access_log off; # Disable access logs for media files
+        # - tcp_nodelay off; # requires sendfile on;
+        access_log off;
+        tcp_nodelay off;
+        expires 30d;
+        autoindex off;
+    }
+
+    location /media/ {
+        autoindex off;
+        alias ${NGINX_MEDIA_FOLDER};
+        expires 30d;
+        add_header Cache-Control "public, no-transform";
+        access_log off;
+    }
+
+    location /jupyterhub/ {
+        proxy_pass http://jupyterhub:${JUPYTERHUB_UI_PORT};
+        # note that jupyterhub:`PORT` here do not end with/
+        # i have no idea why but it works.
+
+        # Standard headers
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket Support (CRITICAL for Jupyter)
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        # Timeouts (Jupyter kernels can be idle/long-running)
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+
+    # Docker Registry - Path Prefix
+    # Handles requests like: docker push myhostname/docker-registry/myimage:tag
+    # Note: Standard docker clients generally expect /v2/ at the root.
+    location /docker-registry/ {
+        # Basic Auth
+        auth_basic "Registry Realm";
+        auth_basic_user_file /etc/nginx/auth/htpasswd;
+
+        if ($http_user_agent ~ "^(docker\/1\.(3|4|5(?!\.[0-9]-dev))|Go ).*$" ) {
+            return 404;
+        }
+
+        client_max_body_size 0;
+        chunked_transfer_encoding on;
+
+        # Trailing slash to strip prefix
+        proxy_pass http://container_registry:5000/;
+        proxy_redirect / /docker-registry/;
+
+        proxy_set_header  Host              $http_host;
+        proxy_set_header  X-Real-IP         $remote_addr;
+        proxy_set_header  X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header  X-Forwarded-Proto $scheme;
+        proxy_read_timeout                  900;
+    }
+
+    # Docker Registry - Root v2
+    # Handles requests like: docker push myhostname/image:tag
+    # Required for standard Docker client compatibility if not using namespaced path.
+    location /v2/ {
+        # Basic Auth
+        auth_basic "Registry Realm";
+        auth_basic_user_file /etc/nginx/auth/htpasswd;
+
+        if ($http_user_agent ~ "^(docker\/1\.(3|4|5(?!\.[0-9]-dev))|Go ).*$" ) {
+            return 404;
+        }
+
+        client_max_body_size 0;
+        chunked_transfer_encoding on;
+
+        # No trailing slash needed as /v2/ matches backend
+        proxy_pass http://container_registry:5000;
+
+        proxy_set_header  Host              $http_host;
+        proxy_set_header  X-Real-IP         $remote_addr;
+        proxy_set_header  X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header  X-Forwarded-Proto $scheme;
+        proxy_read_timeout                  900;
+    }
+
+    error_page 500 502 503 504 /50x.html;
+    location = /50x.html {
+        root /usr/share/nginx/html;
+    }
+}
