@@ -3,9 +3,9 @@ services:
     restart: unless-stopped
     container_name: ${PROJECT_NAME}_nginx
     build:
-      context: ./src-nginx
+      context: ./nginx-custom
       args:
-        url_docker: ${URL_DOCKER_INDEX}
+        URL_DOCKER_INDEX: ${URL_DOCKER_INDEX}
     environment:
       - NGINX_ENVSUBST_TEMPLATE_SUFFIX=.template
       - NGINX_ENVSUBST_TEMPLATE_DIR=/etc/nginx/templates
@@ -19,7 +19,9 @@ services:
       - "${NGINX_PORT_HTTP}:${NGINX_PORT_HTTP}"
       - "${NGINX_PORT_HTTPS}:${NGINX_PORT_HTTPS}"
     volumes:
-      - ./src-nginx/templates:/etc/nginx/templates
+      - ./nginx-custom/templates:/etc/nginx/templates
+      - ./nginx-custom/certs:/etc/nginx/certs:ro
+      - ./nginx-custom/auth:/etc/nginx/auth:ro
       - datashare:/datashare
       - datalogs:/datalogs
       - nginx_cache:/var/cache/nginx
@@ -29,9 +31,7 @@ services:
   container_registry:
     container_name: ${PROJECT_NAME}_ctn_reg
     restart: unless-stopped
-    image: ${URL_DOCKER_INDEX}/registry:3
-    ports:
-      - "${CTN_REGISTRY_PORT}:${CTN_REGISTRY_PORT}"
+    image: ${URL_DOCKER_INDEX}/registry:2
     volumes:
       - data_container_registry:/var/lib/registry
     networks:
