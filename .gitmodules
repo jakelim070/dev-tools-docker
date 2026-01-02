@@ -1,3 +1,6 @@
 [submodule "src-nginx"]
 	path = src-nginx
 	url = git@github.com:jakelime/docker-nginx.git
+[submodule "src-jupyterhub"]
+	path = src-jupyterhub
+	url = git@github.com:jakelime/jupyterhub.git
